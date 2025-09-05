@@ -1,0 +1,787 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Realistic 3D Forest Explorer</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            background: #000;
+            overflow: hidden;
+            font-family: Arial, sans-serif;
+        }
+
+        #container {
+            width: 100vw;
+            height: 100vh;
+        }
+
+        #ui {
+            position: absolute;
+            top: 20px;
+            left: 20px;
+            color: white;
+            z-index: 100;
+            background: rgba(0,0,0,0.8);
+            padding: 15px;
+            border-radius: 10px;
+            font-size: 14px;
+            backdrop-filter: blur(5px);
+        }
+
+        #crosshair {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            width: 20px;
+            height: 20px;
+            z-index: 100;
+        }
+
+        #crosshair::before,
+        #crosshair::after {
+            content: '';
+            position: absolute;
+            background: rgba(255, 255, 255, 0.8);
+            box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.5);
+        }
+
+        #crosshair::before {
+            width: 2px;
+            height: 20px;
+            left: 9px;
+            top: 0;
+        }
+
+        #crosshair::after {
+            width: 20px;
+            height: 2px;
+            left: 0;
+            top: 9px;
+        }
+
+        #loading {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            color: white;
+            font-size: 20px;
+            z-index: 200;
+            text-align: center;
+        }
+
+        .loading-spinner {
+            border: 3px solid rgba(255,255,255,0.3);
+            border-top: 3px solid #fff;
+            border-radius: 50%;
+            width: 40px;
+            height: 40px;
+            animation: spin 1s linear infinite;
+            margin: 20px auto;
+        }
+
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+    </style>
+</head>
+<body>
+    <div id="container"></div>
+    <div id="crosshair"></div>
+    <div id="ui">
+        <div><strong>🌲 Realistic Forest Explorer</strong></div>
+        <div>WASD - Move around</div>
+        <div>Mouse - Look & aim</div>
+        <div>Shift - Run faster</div>
+        <div>Space - Jump</div>
+        <div>Click to lock cursor</div>
+        <div>ESC - Release cursor</div>
+    </div>
+    <div id="loading">
+        <div class="loading-spinner"></div>
+        <div>Loading Realistic Forest...</div>
+        <div style="font-size: 14px; margin-top: 10px;">Creating textures & terrain...</div>
+    </div>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script>
+        let scene, camera, renderer;
+        let trees = [];
+        let rocks = [];
+        let flowers = [];
+        let moveState = {
+            forward: false, backward: false, left: false, right: false,
+            shift: false, space: false, jumping: false
+        };
+        let velocity = new THREE.Vector3();
+        let direction = new THREE.Vector3();
+        let isPointerLocked = false;
+        let yaw = 0, pitch = 0;
+        let jumpVelocity = 0;
+
+        const WALK_SPEED = 25;
+        const RUN_SPEED = 50;
+        const JUMP_SPEED = 15;
+        const GRAVITY = 50;
+        const PLAYER_HEIGHT = 3;
+
+        function init() {
+            scene = new THREE.Scene();
+            scene.fog = new THREE.Fog(0xcccccc, 50, 400);
+
+            camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+            camera.position.set(0, PLAYER_HEIGHT, 10);
+
+            renderer = new THREE.WebGLRenderer({ antialias: true });
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            renderer.setClearColor(0x87CEEB, 1);
+            renderer.shadowMap.enabled = true;
+            renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+            renderer.gammaOutput = true;
+            renderer.gammaFactor = 2.2;
+            document.getElementById('container').appendChild(renderer.domElement);
+
+            createRealisticLighting();
+            createRealisticGround();
+            createRealisticSky();
+            createRealisticForest();
+
+            setupControls();
+            setupEventListeners();
+
+            document.getElementById('loading').style.display = 'none';
+            animate();
+        }
+
+        function createRealisticLighting() {
+            // Warm ambient light
+            const ambientLight = new THREE.AmbientLight(0x87CEEB, 0.4);
+            scene.add(ambientLight);
+
+            // Realistic sun light
+            const sunLight = new THREE.DirectionalLight(0xFFF4E6, 1.2);
+            sunLight.position.set(100, 150, 50);
+            sunLight.castShadow = true;
+            sunLight.shadow.mapSize.width = 4096;
+            sunLight.shadow.mapSize.height = 4096;
+            sunLight.shadow.camera.near = 0.5;
+            sunLight.shadow.camera.far = 500;
+            sunLight.shadow.camera.left = -150;
+            sunLight.shadow.camera.right = 150;
+            sunLight.shadow.camera.top = 150;
+            sunLight.shadow.camera.bottom = -150;
+            sunLight.shadow.bias = -0.0001;
+            scene.add(sunLight);
+
+            // Hemisphere light for natural sky illumination
+            const hemiLight = new THREE.HemisphereLight(0x87CEEB, 0x3e2723, 0.6);
+            hemiLight.position.set(0, 100, 0);
+            scene.add(hemiLight);
+        }
+
+        function createRealisticBarkTexture() {
+            const canvas = document.createElement('canvas');
+            canvas.width = 256;
+            canvas.height = 512;
+            const ctx = canvas.getContext('2d');
+
+            // Base bark color with gradient
+            const gradient = ctx.createLinearGradient(0, 0, 256, 0);
+            gradient.addColorStop(0, '#2d1810');
+            gradient.addColorStop(0.3, '#4a2c17');
+            gradient.addColorStop(0.7, '#5d3317');
+            gradient.addColorStop(1, '#3e1f0f');
+            ctx.fillStyle = gradient;
+            ctx.fillRect(0, 0, 256, 512);
+
+            // Vertical bark lines
+            for (let i = 0; i < 15; i++) {
+                const x = Math.random() * 256;
+                const width = Math.random() * 3 + 1;
+                ctx.fillStyle = '#1a0d06';
+                ctx.fillRect(x, 0, width, 512);
+
+                // Lighter highlight next to dark line
+                ctx.fillStyle = '#6d4028';
+                ctx.fillRect(x + width, 0, 1, 512);
+            }
+
+            // Horizontal bark texture
+            for (let i = 0; i < 30; i++) {
+                const y = Math.random() * 512;
+                const height = Math.random() * 2 + 1;
+                ctx.fillStyle = `rgba(26, 13, 6, ${0.3 + Math.random() * 0.4})`;
+                ctx.fillRect(0, y, 256, height);
+            }
+
+            // Add knots and imperfections
+            for (let i = 0; i < 8; i++) {
+                const x = Math.random() * 256;
+                const y = Math.random() * 512;
+                const radius = Math.random() * 15 + 5;
+
+                const knotGradient = ctx.createRadialGradient(x, y, 0, x, y, radius);
+                knotGradient.addColorStop(0, '#1a0d06');
+                knotGradient.addColorStop(0.7, '#2d1810');
+                knotGradient.addColorStop(1, '#4a2c17');
+
+                ctx.fillStyle = knotGradient;
+                ctx.beginPath();
+                ctx.arc(x, y, radius, 0, Math.PI * 2);
+                ctx.fill();
+            }
+
+            return new THREE.CanvasTexture(canvas);
+        }
+
+        function createRealisticLeafTexture() {
+            const canvas = document.createElement('canvas');
+            canvas.width = 512;
+            canvas.height = 512;
+            const ctx = canvas.getContext('2d');
+
+            // Base green with natural variation
+            const baseColors = ['#1a4d1a', '#2d5a2d', '#1e471e', '#2a5c2a', '#174017'];
+
+            // Fill with base color
+            ctx.fillStyle = baseColors[Math.floor(Math.random() * baseColors.length)];
+            ctx.fillRect(0, 0, 512, 512);
+
+            // Create leaf cluster pattern
+            for (let i = 0; i < 200; i++) {
+                const x = Math.random() * 512;
+                const y = Math.random() * 512;
+                const size = Math.random() * 8 + 3;
+
+                // Random green shade
+                const hue = 90 + Math.random() * 30;
+                const sat = 60 + Math.random() * 30;
+                const light = 15 + Math.random() * 25;
+                ctx.fillStyle = `hsl(${hue}, ${sat}%, ${light}%)`;
+
+                // Create leaf shape
+                ctx.beginPath();
+                ctx.ellipse(x, y, size, size * 1.5, Math.random() * Math.PI, 0, Math.PI * 2);
+                ctx.fill();
+            }
+
+            // Add highlights and shadows
+            for (let i = 0; i < 100; i++) {
+                const x = Math.random() * 512;
+                const y = Math.random() * 512;
+                const size = Math.random() * 4 + 1;
+
+                ctx.fillStyle = Math.random() > 0.5
+                    ? 'rgba(255, 255, 255, 0.1)'
+                    : 'rgba(0, 0, 0, 0.2)';
+                ctx.fillRect(x, y, size, size);
+            }
+
+            // Add some autumn colors randomly
+            if (Math.random() > 0.7) {
+                for (let i = 0; i < 50; i++) {
+                    const x = Math.random() * 512;
+                    const y = Math.random() * 512;
+                    const size = Math.random() * 6 + 2;
+
+                    const autumnColors = ['#d2691e', '#cd853f', '#daa520', '#b8860b'];
+                    ctx.fillStyle = autumnColors[Math.floor(Math.random() * autumnColors.length)];
+                    ctx.globalAlpha = 0.6;
+                    ctx.fillRect(x, y, size, size);
+                    ctx.globalAlpha = 1.0;
+                }
+            }
+
+            return new THREE.CanvasTexture(canvas);
+        }
+
+        function createRealisticGrassTexture() {
+            const canvas = document.createElement('canvas');
+            canvas.width = 512;
+            canvas.height = 512;
+            const ctx = canvas.getContext('2d');
+
+            // Rich soil base
+            ctx.fillStyle = '#2d1810';
+            ctx.fillRect(0, 0, 512, 512);
+
+            // Add dirt patches
+            for (let i = 0; i < 50; i++) {
+                const x = Math.random() * 512;
+                const y = Math.random() * 512;
+                const size = Math.random() * 30 + 10;
+
+                ctx.fillStyle = `hsl(30, 40%, ${8 + Math.random() * 10}%)`;
+                ctx.beginPath();
+                ctx.arc(x, y, size, 0, Math.PI * 2);
+                ctx.fill();
+            }
+
+            // Dense grass blades
+            for (let i = 0; i < 2000; i++) {
+                const x = Math.random() * 512;
+                const y = Math.random() * 512;
+                const length = Math.random() * 8 + 2;
+                const width = Math.random() * 2 + 0.5;
+
+                // Grass color variation
+                const hue = 85 + Math.random() * 25;
+                const sat = 50 + Math.random() * 30;
+                const light = 20 + Math.random() * 20;
+                ctx.fillStyle = `hsl(${hue}, ${sat}%, ${light}%)`;
+
+                ctx.fillRect(x, y, width, length);
+
+                // Add some taller grass
+                if (Math.random() > 0.85) {
+                    ctx.fillStyle = `hsl(${hue}, ${sat}%, ${light + 5}%)`;
+                    ctx.fillRect(x - 0.5, y - 3, width + 1, length + 4);
+                }
+            }
+
+            // Add small flowers
+            for (let i = 0; i < 30; i++) {
+                const x = Math.random() * 512;
+                const y = Math.random() * 512;
+                const colors = ['#ffff00', '#ffffff', '#ff69b4', '#9370db', '#ffd700'];
+
+                ctx.fillStyle = colors[Math.floor(Math.random() * colors.length)];
+                ctx.beginPath();
+                ctx.arc(x, y, 2, 0, Math.PI * 2);
+                ctx.fill();
+            }
+
+            return new THREE.CanvasTexture(canvas);
+        }
+
+        function createRealisticGround() {
+            const groundGeometry = new THREE.PlaneGeometry(800, 800, 100, 100);
+
+            // Add height variation
+            const positions = groundGeometry.attributes.position.array;
+            for (let i = 2; i < positions.length; i += 3) {
+                positions[i] += (Math.random() - 0.5) * 2;
+            }
+            groundGeometry.attributes.position.needsUpdate = true;
+            groundGeometry.computeVertexNormals();
+
+            const grassTexture = createRealisticGrassTexture();
+            grassTexture.wrapS = THREE.RepeatWrapping;
+            grassTexture.wrapT = THREE.RepeatWrapping;
+            grassTexture.repeat.set(20, 20);
+
+            const groundMaterial = new THREE.MeshLambertMaterial({
+                map: grassTexture,
+                color: 0x9d8b7c
+            });
+
+            const ground = new THREE.Mesh(groundGeometry, groundMaterial);
+            ground.rotation.x = -Math.PI / 2;
+            ground.receiveShadow = true;
+            scene.add(ground);
+        }
+
+        function createRealisticSky() {
+            // Create realistic sky dome
+            const skyGeometry = new THREE.SphereGeometry(500, 32, 32);
+
+            const canvas = document.createElement('canvas');
+            canvas.width = 1024;
+            canvas.height = 512;
+            const ctx = canvas.getContext('2d');
+
+            // Realistic sky gradient
+            const skyGradient = ctx.createLinearGradient(0, 0, 0, 512);
+            skyGradient.addColorStop(0, '#4a90e2');    // Deep blue at top
+            skyGradient.addColorStop(0.3, '#87ceeb');   // Sky blue
+            skyGradient.addColorStop(0.7, '#b8d8f0');   // Light blue
+            skyGradient.addColorStop(0.9, '#f0f8ff');   // Almost white at horizon
+            skyGradient.addColorStop(1, '#fff8dc');     // Warm horizon
+
+            ctx.fillStyle = skyGradient;
+            ctx.fillRect(0, 0, 1024, 512);
+
+            // Add realistic clouds
+            ctx.globalAlpha = 0.8;
+            for (let i = 0; i < 15; i++) {
+                const x = Math.random() * 1024;
+                const y = Math.random() * 200 + 50; // Clouds in upper portion
+                const width = Math.random() * 100 + 50;
+                const height = Math.random() * 30 + 20;
+
+                // Cloud gradient
+                const cloudGradient = ctx.createRadialGradient(x, y, 0, x, y, width/2);
+                cloudGradient.addColorStop(0, 'rgba(255, 255, 255, 0.9)');
+                cloudGradient.addColorStop(0.5, 'rgba(240, 240, 240, 0.6)');
+                cloudGradient.addColorStop(1, 'rgba(220, 220, 220, 0.1)');
+
+                ctx.fillStyle = cloudGradient;
+                ctx.beginPath();
+                ctx.ellipse(x, y, width, height, 0, 0, Math.PI * 2);
+                ctx.fill();
+            }
+            ctx.globalAlpha = 1.0;
+
+            // Add sun
+            const sunX = 800;
+            const sunY = 100;
+            const sunGradient = ctx.createRadialGradient(sunX, sunY, 0, sunX, sunY, 40);
+            sunGradient.addColorStop(0, '#ffff99');
+            sunGradient.addColorStop(0.4, '#ffff66');
+            sunGradient.addColorStop(0.8, 'rgba(255, 255, 102, 0.3)');
+            sunGradient.addColorStop(1, 'rgba(255, 255, 102, 0)');
+
+            ctx.fillStyle = sunGradient;
+            ctx.beginPath();
+            ctx.arc(sunX, sunY, 40, 0, Math.PI * 2);
+            ctx.fill();
+
+            const skyTexture = new THREE.CanvasTexture(canvas);
+            const skyMaterial = new THREE.MeshBasicMaterial({
+                map: skyTexture,
+                side: THREE.BackSide
+            });
+
+            const sky = new THREE.Mesh(skyGeometry, skyMaterial);
+            scene.add(sky);
+        }
+
+        function createRealisticTree(x, z) {
+            const group = new THREE.Group();
+
+            // Realistic trunk with taper
+            const trunkHeight = Math.random() * 12 + 18;
+            const trunkRadius = Math.random() * 0.8 + 1.2;
+            const trunkGeometry = new THREE.CylinderGeometry(
+                trunkRadius * 0.3, trunkRadius, trunkHeight, 12, 4
+            );
+
+            const barkTexture = createRealisticBarkTexture();
+            barkTexture.wrapS = THREE.RepeatWrapping;
+            barkTexture.repeat.set(1, 2);
+
+            const trunkMaterial = new THREE.MeshLambertMaterial({
+                map: barkTexture
+            });
+
+            const trunk = new THREE.Mesh(trunkGeometry, trunkMaterial);
+            trunk.position.y = trunkHeight / 2;
+            trunk.castShadow = true;
+            trunk.receiveShadow = true;
+            group.add(trunk);
+
+            // Realistic branch structure
+            const branchCount = Math.floor(Math.random() * 3) + 2;
+            for (let i = 0; i < branchCount; i++) {
+                const branchHeight = trunkHeight * (0.6 + Math.random() * 0.4);
+                const branchLength = Math.random() * 4 + 3;
+                const branchRadius = trunkRadius * (0.1 + Math.random() * 0.1);
+
+                const branchGeometry = new THREE.CylinderGeometry(
+                    branchRadius * 0.5, branchRadius, branchLength, 8
+                );
+                const branch = new THREE.Mesh(branchGeometry, trunkMaterial);
+
+                const angle = (i / branchCount) * Math.PI * 2 + Math.random() * 0.5;
+                branch.position.x = Math.cos(angle) * 1.5;
+                branch.position.z = Math.sin(angle) * 1.5;
+                branch.position.y = branchHeight;
+                branch.rotation.z = Math.cos(angle) * 0.3;
+                branch.rotation.x = Math.sin(angle) * 0.3;
+                branch.castShadow = true;
+
+                group.add(branch);
+            }
+
+            // Realistic foliage with multiple layers
+            const leafTexture = createRealisticLeafTexture();
+            const leafMaterial = new THREE.MeshLambertMaterial({
+                map: leafTexture,
+                color: new THREE.Color().setHSL(0.3, 0.7, 0.35),
+                transparent: true,
+                alphaTest: 0.1
+            });
+
+            // Main canopy
+            for (let i = 0; i < 4; i++) {
+                const leafRadius = Math.random() * 4 + 6;
+                const leafGeometry = new THREE.SphereGeometry(leafRadius, 12, 8);
+                const leaves = new THREE.Mesh(leafGeometry, leafMaterial);
+
+                leaves.position.y = trunkHeight + Math.random() * 4 - 2;
+                leaves.position.x = (Math.random() - 0.5) * 6;
+                leaves.position.z = (Math.random() - 0.5) * 6;
+                leaves.castShadow = true;
+                leaves.receiveShadow = true;
+
+                group.add(leaves);
+            }
+
+            // Small undergrowth leaves
+            if (Math.random() > 0.6) {
+                const smallLeafGeometry = new THREE.SphereGeometry(2, 8, 6);
+                const smallLeaves = new THREE.Mesh(smallLeafGeometry, leafMaterial);
+                smallLeaves.position.y = 2;
+                smallLeaves.position.x = (Math.random() - 0.5) * 4;
+                smallLeaves.position.z = (Math.random() - 0.5) * 4;
+                smallLeaves.castShadow = true;
+                group.add(smallLeaves);
+            }
+
+            group.position.set(x, 0, z);
+            group.rotation.y = Math.random() * Math.PI * 2;
+
+            return group;
+        }
+
+        function createRealisticRock(x, z) {
+            const rockGeometry = new THREE.DodecahedronGeometry(Math.random() * 3 + 2, 1);
+
+            // Realistic rock texture
+            const canvas = document.createElement('canvas');
+            canvas.width = 128;
+            canvas.height = 128;
+            const ctx = canvas.getContext('2d');
+
+            // Base rock color
+            const rockGradient = ctx.createLinearGradient(0, 0, 128, 128);
+            rockGradient.addColorStop(0, '#4a4a4a');
+            rockGradient.addColorStop(0.5, '#666666');
+            rockGradient.addColorStop(1, '#333333');
+
+            ctx.fillStyle = rockGradient;
+            ctx.fillRect(0, 0, 128, 128);
+
+            // Add rock texture details
+            for (let i = 0; i < 100; i++) {
+                const x = Math.random() * 128;
+                const y = Math.random() * 128;
+                const size = Math.random() * 3 + 1;
+                const shade = Math.random() * 60 + 20;
+                ctx.fillStyle = `hsl(0, 0%, ${shade}%)`;
+                ctx.fillRect(x, y, size, size);
+            }
+
+            // Add moss on some rocks
+            if (Math.random() > 0.5) {
+                for (let i = 0; i < 20; i++) {
+                    const x = Math.random() * 128;
+                    const y = Math.random() * 128;
+                    const size = Math.random() * 8 + 3;
+                    ctx.fillStyle = `hsl(${100 + Math.random() * 20}, 60%, 25%)`;
+                    ctx.globalAlpha = 0.7;
+                    ctx.beginPath();
+                    ctx.arc(x, y, size, 0, Math.PI * 2);
+                    ctx.fill();
+                    ctx.globalAlpha = 1.0;
+                }
+            }
+
+            const rockTexture = new THREE.CanvasTexture(canvas);
+            const rockMaterial = new THREE.MeshLambertMaterial({ map: rockTexture });
+
+            const rock = new THREE.Mesh(rockGeometry, rockMaterial);
+            rock.position.set(x, Math.random() * 1, z);
+            rock.rotation.set(Math.random(), Math.random(), Math.random());
+            rock.castShadow = true;
+            rock.receiveShadow = true;
+
+            return rock;
+        }
+
+        function createRealisticForest() {
+            // Dense forest with varied placement
+            for (let i = 0; i < 200; i++) {
+                const angle = Math.random() * Math.PI * 2;
+                const distance = Math.random() * 300 + 30;
+                const x = Math.cos(angle) * distance;
+                const z = Math.sin(angle) * distance;
+
+                const tree = createRealisticTree(x, z);
+                trees.push(tree);
+                scene.add(tree);
+            }
+
+            // Scattered rocks
+            for (let i = 0; i < 80; i++) {
+                const x = (Math.random() - 0.5) * 600;
+                const z = (Math.random() - 0.5) * 600;
+                const rock = createRealisticRock(x, z);
+                rocks.push(rock);
+                scene.add(rock);
+            }
+        }
+
+        function setupControls() {
+            document.addEventListener('click', () => {
+                if (!isPointerLocked) {
+                    renderer.domElement.requestPointerLock();
+                }
+            });
+
+            document.addEventListener('pointerlockchange', () => {
+                isPointerLocked = document.pointerLockElement === renderer.domElement;
+            });
+
+            document.addEventListener('mousemove', (event) => {
+                if (!isPointerLocked) return;
+
+                const sensitivity = 0.002;
+                yaw -= event.movementX * sensitivity;
+                pitch -= event.movementY * sensitivity;
+                pitch = Math.max(-Math.PI/2 + 0.1, Math.min(Math.PI/2 - 0.1, pitch));
+
+                camera.rotation.order = 'YXZ';
+                camera.rotation.y = yaw;
+                camera.rotation.x = pitch;
+            });
+        }
+
+        function setupEventListeners() {
+            const onKeyDown = (event) => {
+                switch (event.code) {
+                    case 'KeyW': moveState.forward = true; break;
+                    case 'KeyS': moveState.backward = true; break;
+                    case 'KeyA': moveState.left = true; break;
+                    case 'KeyD': moveState.right = true; break;
+                    case 'ShiftLeft':
+                    case 'ShiftRight': moveState.shift = true; break;
+                    case 'Space':
+                        event.preventDefault();
+                        if (!moveState.jumping) {
+                            moveState.space = true;
+                            moveState.jumping = true;
+                            jumpVelocity = JUMP_SPEED;
+                        }
+                        break;
+                    case 'Escape': document.exitPointerLock(); break;
+                }
+            };
+
+            const onKeyUp = (event) => {
+                switch (event.code) {
+                    case 'KeyW': moveState.forward = false; break;
+                    case 'KeyS': moveState.backward = false; break;
+                    case 'KeyA': moveState.left = false; break;
+                    case 'KeyD': moveState.right = false; break;
+                    case 'ShiftLeft':
+                    case 'ShiftRight': moveState.shift = false; break;
+                    case 'Space': moveState.space = false; break;
+                }
+            };
+
+            document.addEventListener('keydown', onKeyDown);
+            document.addEventListener('keyup', onKeyUp);
+            window.addEventListener('resize', onWindowResize);
+        }
+
+        function updateMovement(delta) {
+            // Get current speed
+            const currentSpeed = moveState.shift ? RUN_SPEED : WALK_SPEED;
+
+            // Apply friction
+            velocity.x *= Math.pow(0.1, delta);
+            velocity.z *= Math.pow(0.1, delta);
+
+            // Calculate movement direction
+            direction.z = Number(moveState.forward) - Number(moveState.backward);
+            direction.x = Number(moveState.right) - Number(moveState.left);
+            direction.normalize();
+
+            // Apply movement
+            if (moveState.forward || moveState.backward) {
+                velocity.z -= direction.z * currentSpeed * delta;
+            }
+            if (moveState.left || moveState.right) {
+                velocity.x -= direction.x * currentSpeed * delta;
+            }
+
+            // Transform movement relative to camera
+            const forward = new THREE.Vector3(0, 0, -1);
+            forward.applyQuaternion(camera.quaternion);
+            forward.y = 0;
+            forward.normalize();
+
+            const right = new THREE.Vector3(1, 0, 0);
+            right.applyQuaternion(camera.quaternion);
+            right.y = 0;
+            right.normalize();
+
+            const moveVector = new THREE.Vector3();
+            moveVector.addScaledVector(forward, -velocity.z * delta);
+            moveVector.addScaledVector(right, -velocity.x * delta);
+
+            camera.position.add(moveVector);
+
+            // Handle jumping and gravity
+            if (moveState.jumping) {
+                jumpVelocity -= GRAVITY * delta;
+                camera.position.y += jumpVelocity * delta;
+
+                // Land on ground
+                if (camera.position.y <= PLAYER_HEIGHT) {
+                    camera.position.y = PLAYER_HEIGHT;
+                    moveState.jumping = false;
+                    jumpVelocity = 0;
+                }
+            } else {
+                // Keep on ground
+                camera.position.y = PLAYER_HEIGHT;
+            }
+
+            // Boundary limits
+            const boundary = 350;
+            camera.position.x = Math.max(-boundary, Math.min(boundary, camera.position.x));
+            camera.position.z = Math.max(-boundary, Math.min(boundary, camera.position.z));
+        }
+
+        function onWindowResize() {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        }
+
+        const clock = new THREE.Clock();
+        let windTime = 0;
+
+        function animate() {
+            requestAnimationFrame(animate);
+
+            const delta = clock.getDelta();
+            windTime += delta;
+
+            updateMovement(delta);
+
+            // Realistic wind animation for trees
+            trees.forEach((tree, index) => {
+                const windStrength = 0.01 + Math.sin(windTime * 0.5 + index * 0.1) * 0.005;
+                tree.rotation.z = Math.sin(windTime * 0.3 + index * 0.2) * windStrength;
+                tree.rotation.x = Math.cos(windTime * 0.2 + index * 0.3) * windStrength * 0.5;
+
+                // Animate individual leaf clusters
+                tree.children.forEach((child, childIndex) => {
+                    if (child.geometry && child.geometry.type === 'SphereGeometry' && childIndex > 1) {
+                        child.rotation.y += Math.sin(windTime * 2 + childIndex) * 0.002;
+                        child.position.y += Math.sin(windTime * 1.5 + childIndex) * 0.05;
+                    }
+                });
+            });
+
+            // Subtle fog animation
+            scene.fog.density = 0.002 + Math.sin(windTime * 0.1) * 0.0005;
+
+            renderer.render(scene, camera);
+        }
+
+        // Initialize when page loads
+        window.addEventListener('load', () => {
+            setTimeout(init, 100); // Small delay to ensure everything is ready
+        });
+    </script>
+</body>
+</html>
